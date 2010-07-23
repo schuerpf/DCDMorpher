@@ -1,13 +1,29 @@
 import re
 
 from django.contrib import admin
-from django.db import connection, models
+from django.db import connections, models
 
 field_lookup = {
     'INTEGER': lambda **kwargs: models.IntegerField(**kwargs),
     'VARCHAR': lambda **kwargs: models.CharField(max_length=255, **kwargs),
     'FOREIGN': lambda model_name, **kwargs: models.ForeignKey(model_name, **kwargs),
 }
+
+class MultiDBModelAdmin(admin.ModelAdmin):
+    # A handy constant for the name of the alternate database.
+    using = 'coredata'
+    
+    def save_model(self, request, obj, form, change):
+        obj.save(using=self.using)
+                            
+    def queryset(self, request):
+        return super(MultiDBModelAdmin, self).queryset(request).using(self.using)
+    
+    def formfield_for_foreignkey(self, db_field, request=None, **kwargs):
+        return super(MultiDBModelAdmin, self).formfield_for_foreignkey(db_field, request=request, using=self.using, **kwargs)
+    
+    def formfield_for_manytomany(self, db_field, request=None, **kwargs):
+        return super(MultiDBModelAdmin, self).formfield_for_manytomany(db_field, request=request, using=self.using, **kwargs)
     
 class Morph(object):
     
@@ -18,7 +34,7 @@ class Morph(object):
             pass
         
         model_list = []
-        cursor = connection.cursor()
+        cursor = connections['coredata'].cursor()
         cursor.execute('select * from sqlite_master');
         for row in cursor.fetchall():
             if row[0] == u'table':
@@ -76,7 +92,6 @@ class Morph(object):
                                       field_name: field_lookup[field[1]](**kwargs),
                         })
                 new_model = type(model_name, (models.Model,), attrs)
-                class Admin(admin.ModelAdmin):
-                    pass
-                admin.site.register(new_model)
+
+                admin.site.register(new_model, MultiDBModelAdmin)
         return
