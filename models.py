@@ -1,7 +1,8 @@
 import re
 
 from django.contrib import admin
-from django.db import connections, models
+from django.db import connections, models, transaction
+from django.db.models.signals import post_delete, post_save
 
 field_lookup = {
     'INTEGER': lambda **kwargs: models.IntegerField(**kwargs),
@@ -24,7 +25,19 @@ class MultiDBModelAdmin(admin.ModelAdmin):
     
     def formfield_for_manytomany(self, db_field, request=None, **kwargs):
         return super(MultiDBModelAdmin, self).formfield_for_manytomany(db_field, request=request, using=self.using, **kwargs)
-    
+
+def morph_post_save(sender, instance=None, creator=None, **kwargs):
+    entity = instance.Z_ENT
+    cursor = connections['coredata'].cursor()
+    cursor.execute('update Z_PRIMARYKEY set Z_MAX = Z_MAX + 1')
+    transaction.commit_unless_managed()
+
+def morph_post_delete(sender, instance, **kwargs):
+    entity = instance.Z_ENT
+    cursor = connections['coredata'].cursor()
+    cursor.execute('update Z_PRIMARYKEY set Z_MAX = Z_MAX -1')
+    transaction.commit_unless_managed()
+
 class Morph(object):
     
     @classmethod
@@ -94,4 +107,6 @@ class Morph(object):
                 new_model = type(model_name, (models.Model,), attrs)
 
                 admin.site.register(new_model, MultiDBModelAdmin)
+                post_save.connect(morph_post_save, sender=new_model)
+                post_delete.connect(morph_post_delete, sender=new_model)
         return
