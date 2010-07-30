@@ -2,7 +2,7 @@ import re
 
 from django.contrib import admin
 from django.db import connections, models, transaction
-from django.db.models.signals import post_delete, post_save
+from django.db.models.signals import post_delete, post_save, pre_save
 
 field_lookup = {
     'INTEGER': lambda **kwargs: models.IntegerField(**kwargs),
@@ -26,17 +26,23 @@ class MultiDBModelAdmin(admin.ModelAdmin):
     def formfield_for_manytomany(self, db_field, request=None, **kwargs):
         return super(MultiDBModelAdmin, self).formfield_for_manytomany(db_field, request=request, using=self.using, **kwargs)
 
+def morph_pre_save(sender, instance, **kwargs):
+    instance.Z_ENT = sender.entity_id
+    instance.Z_OPT = 1
+
 def morph_post_save(sender, instance=None, creator=None, **kwargs):
-    entity = instance.Z_ENT
     cursor = connections['coredata'].cursor()
-    cursor.execute('update Z_PRIMARYKEY set Z_MAX = Z_MAX + 1')
-    transaction.commit_unless_managed()
+    cursor.execute('update Z_PRIMARYKEY set Z_MAX = Z_MAX + 1 where Z_ENT = \'%d\'' % sender.entity_id)
+    transaction.commit_unless_managed(using='coredata')
 
 def morph_post_delete(sender, instance, **kwargs):
     entity = instance.Z_ENT
     cursor = connections['coredata'].cursor()
-    cursor.execute('update Z_PRIMARYKEY set Z_MAX = Z_MAX -1')
-    transaction.commit_unless_managed()
+    cursor.execute('update Z_PRIMARYKEY set Z_MAX = Z_MAX - 1 where Z_ENT = \'%d\'' % sender.entity_id)
+    transaction.commit_unless_managed(using='coredata')
+
+def validate_unique(*args, **kwargs):
+    return True
 
 class Morph(object):
     
@@ -47,6 +53,7 @@ class Morph(object):
             pass
         
         model_list = []
+        exclude = ['Z_ENT', 'Z_OPT', 'Z_PK',]
         cursor = connections['coredata'].cursor()
         cursor.execute('select * from sqlite_master');
         for row in cursor.fetchall():
@@ -58,12 +65,12 @@ class Morph(object):
         cursor.execute('select * from Z_PRIMARYKEY')
         for row in cursor.fetchall():
             entity_list.append([row[0], row[1], 'Z' + row[1].upper()])
-        
         for model_info in model_list:
             model_name = str(model_info[0])
             for entity in entity_list:
                 if entity[2] == model_name:
                     model_name = str(entity[1])
+                    entity_id = entity[0]
             
             setattr(Meta, 'app_label', 'morph')
             setattr(Meta, 'db_table', str(model_info[0]))
@@ -83,8 +90,10 @@ class Morph(object):
                     field_name = field[0]
                     verbose_name = field_name[1:].lower()
                     if first:
-                        kwargs.update({'primary_key': True})
+                        kwargs.update({'primary_key': True,})
                         first = False
+                    if field[0] in exclude:
+                        kwargs.update({'editable':False})
                     relation_matcher = re.search(r'Z(\d{1})[\w\d]+', field_name)
                     if relation_matcher:
                         entity_id = int(relation_matcher.groups(1)[0])
@@ -105,8 +114,11 @@ class Morph(object):
                                       field_name: field_lookup[field[1]](**kwargs),
                         })
                 new_model = type(model_name, (models.Model,), attrs)
-
+                new_model.entity_id = entity_id
+                new_model.validate_unique = validate_unique
                 admin.site.register(new_model, MultiDBModelAdmin)
+                
+                pre_save.connect(morph_pre_save, sender=new_model)
                 post_save.connect(morph_post_save, sender=new_model)
                 post_delete.connect(morph_post_delete, sender=new_model)
         return
