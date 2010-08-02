@@ -10,6 +10,16 @@ field_lookup = {
     'FOREIGN': lambda model_name, **kwargs: models.ForeignKey(model_name, **kwargs),
 }
 
+
+custom = {
+    'ZRECIPE': {
+               'unicode': 'ZNAME',
+               'admin': {
+                         'list_diplay': '',
+                         }
+               }
+}
+
 class MultiDBModelAdmin(admin.ModelAdmin):
     # A handy constant for the name of the alternate database.
     using = 'coredata'
@@ -74,6 +84,7 @@ class Morph(object):
             
             setattr(Meta, 'app_label', 'morph')
             setattr(Meta, 'db_table', str(model_info[0]))
+
             attrs = {'__module__': '', 'Meta': Meta}
             
             # constructing model fields
@@ -86,7 +97,7 @@ class Morph(object):
                 fields = [field.split() for field in definition_string.split(',')]
                 first = True
                 for field in fields:
-                    kwargs = {'db_column':field[0]}
+                    kwargs = {'db_column':field[0], 'blank': True,}
                     field_name = field[0]
                     verbose_name = field_name[1:].lower()
                     if first:
@@ -121,4 +132,16 @@ class Morph(object):
                 pre_save.connect(morph_pre_save, sender=new_model)
                 post_save.connect(morph_post_save, sender=new_model)
                 post_delete.connect(morph_post_delete, sender=new_model)
+        cls.customize()  
         return
+    
+    @classmethod
+    def customize(self):
+        recipe = models.get_model('morph', 'Recipe')
+        recipe.__unicode__ = name_unicode
+        ingredient = models.get_model('morph', 'Ingredient')
+        ingredient.__unicode__ = name_unicode
+        instruction = models.get_model('morph', 'Instruction')
+        instruction.__unicode__ = name_unicode
+def name_unicode(self):
+    return self.ZNAME
